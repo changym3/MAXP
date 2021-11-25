@@ -15,6 +15,49 @@ import dgl.nn as dglnn
 from srcs.layer import HetGraphLayer
 
 
+
+class HetGraphModel(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        self.config = config
+        self.layers = nn.ModuleList()
+        self.norms = nn.ModuleList()
+        self.dropout = nn.Dropout(config.dropout)
+        self.skips =
+
+        num_feats = config.NUM_FEATS
+        hidden_dim=config.hidden_dim
+        num_classes = config.NUM_CLASSES
+
+        self.layers.append(HetGraphLayer(config, num_feats, hidden_dim))
+        self.norms.append(nn.BatchNorm1d(hidden_dim))
+        for l in range(1, config.num_layers):
+            self.layers.append(HetGraphLayer(config, hidden_dim, hidden_dim))
+            self.norms.append(nn.BatchNorm1d(hidden_dim))
+        self.classification = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.BatchNorm1d(hidden_dim),
+            nn.ReLU(),
+            nn.Dropout(config.dropout),
+            nn.Linear(hidden_dim, num_classes)
+        )
+        self.activation = nn.LeakyReLU()
+
+    def forward(self, blocks, features):
+        h = features
+        for i, block in enumerate(blocks):
+            h = self.layers[i](block, h)
+            # x_dst = h[:block.num_dst_nodes()]
+            # h = h + self.skips[i](x_dst)
+            h = self.norms[i](h)
+            h = self.activation(h)
+            h = self.dropout(h)
+        h = self.classification(h)
+        return h
+
+
+
+
 class GraphSageModel(thnn.Module):
 
     def __init__(self,
@@ -55,9 +98,10 @@ class GraphSageModel(thnn.Module):
         for l, (layer, block) in enumerate(zip(self.layers, blocks)):
             h = layer(block, h)
             if l != len(self.layers) - 1:
+
                 h = self.activation(h)
                 h = self.dropout(h)
-
+            
         return h
 
 
@@ -104,7 +148,6 @@ class GraphConvModel(thnn.Module):
             h = layer(block, h)
             if l != len(self.layers) - 1:
                 h = self.dropout(h)
-
         return h
 
 
@@ -165,35 +208,3 @@ class GraphAttnModel(thnn.Module):
         logits = self.layers[-1](blocks[-1],h).mean(1)
 
         return logits
-
-
-class HetGraphModel(nn.Module):
-    def __init__(self, config):
-        super().__init__()
-        self.config = config
-        self.layers = nn.ModuleList()
-
-        num_feats = config.NUM_FEATS
-        hidden_dim=config.hidden_dim
-        num_classes = config.NUM_CLASSES
-        self.layers.append(HetGraphLayer(config, num_feats, hidden_dim))
-        for l in range(1, config.num_layers):
-            self.layers.append(HetGraphLayer(config, hidden_dim, hidden_dim))
-        self.classification = nn.Sequential(nn.Linear(hidden_dim, num_classes))
-        self.activation = nn.LeakyReLU()
-
-    def forward(self, blocks, features):
-        h = features
-        for l, (layer, block) in enumerate(zip(self.layers, blocks)):
-            h = layer(block, h)
-            h = self.activation(h)
-            # h = self.dropout(h)
-        h = self.classification(h)
-        return h
-# # For test new modules
-# model = model.to(device)
-# loader = datamodule.train_dataloader()
-# for batch in loader:
-#     # _, output_nodes, _ = batch
-#     batch_pred = model(batch)
-#     break

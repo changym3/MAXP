@@ -23,7 +23,7 @@ import dgl.multiprocessing as mp
 
 from srcs.lightning_model import MaxpLightning
 import srcs.graph_model as gm
-from srcs.configs import dump_config, load_config
+from srcs.configs import *
 from srcs.datamodule import MaxpDataModule
 
 
@@ -94,7 +94,7 @@ def save_submission(model, datamodule, device, name):
 
 if __name__ == '__main__':
 
-    config = get_config(series='circle')
+    config = get_cubic_config(series='circle')
 
     device = torch.device('cuda:{}'.format(config.gpu_id))
     datamodule = MaxpDataModule(config, device)

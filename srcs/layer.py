@@ -20,7 +20,7 @@ class HetGraphLayer(nn.Module):
             )
         elif gnn_model == 'HetGAT':
             self.mods = nn.ModuleDict(
-                {rel: dgl.nn.GATConv(in_feats, out_feats // config.num_heads, config.num_heads, residual=True)
+                {rel: dgl.nn.GATConv(in_feats, out_feats // config.num_heads, config.num_heads)
                 for rel in etypes}
             )
         elif gnn_model == 'HetSAGE':

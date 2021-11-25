@@ -30,7 +30,7 @@ def load_config(model='triangle', version=0):
     return config
 
 
-def get_light_config(series='light', version=None):
+def get_light_config(series='test', version=None):
     config = EasyDict()
     # dataset
     config['DATA_PATH'] = './official_data/processed_data/'
@@ -45,7 +45,7 @@ def get_light_config(series='light', version=None):
     config['num_layers'] = 2
     config['fanout'] = [10] * config.num_layers
     # model 
-    config['etypes'] = ['cite', 'cited'] # ['bicited']
+    config['etypes'] = ['bicited']  # ['bicited']    ['cite', 'cited', 'bicited']    ['cite', 'cited'] 
     config['het_combine'] = 'attn' # 'attn', 'mean'
     config['num_heads'] = 4
     config['feat_drop'] = 0.3
@@ -54,13 +54,13 @@ def get_light_config(series='light', version=None):
     config['lr'] = 0.005
     config['num_epochs'] = 1000
     config['batch_size'] = 4096 * 32
-        # sage can be 4096 * 16
+        # HetGAT with single edge can be 4096 * 32
     config['patience'] = 10
     # environments
     config['gpu_id'] = 1
     config['num_workers'] = 0
     # model info
-    config['directory'] = 'baselines'
+    config['directory'] = 'light'
     config['series'] = series
     config['version'] = version
 
@@ -69,7 +69,7 @@ def get_light_config(series='light', version=None):
     return config
 
 
-def get_cubic_config(series='cubic', version=None):
+def get_cubic_config(series='test', version=None):
     config = EasyDict()
     # dataset
     config['DATA_PATH'] = './official_data/processed_data/'
@@ -99,9 +99,23 @@ def get_cubic_config(series='cubic', version=None):
     config['gpu_id'] = 1
     config['num_workers'] = 0
     # model info
-    config['directory'] = 'logs'
+    config['directory'] = 'cubic'
     config['series'] = series
     config['version'] = version
+
+    # print('############### Config info: ###############')
+    # print(json.dumps(config, indent=4))
+    return config
+
+
+
+
+def get_test_config():
+    config = get_light_config()
+    # model info
+    config['directory'] = 'logs'
+    config['series'] = 'test'
+    config['version'] = None
 
     # print('############### Config info: ###############')
     # print(json.dumps(config, indent=4))
