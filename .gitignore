@@ -1,0 +1,11 @@
+*.ipynb
+submissions/
+reproduce/
+srcs/__pycache__/
+srcs/.ipynb_checkpoints/
+official_baselines/
+logs/
+configs/
+official_data/
+*_checkpoints
+*pycache*
