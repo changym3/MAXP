@@ -2,8 +2,9 @@ import torch
 import torch.nn as nn
 import dgl 
 import torch.nn.functional as F
-from ..model_utils import ChannelCombine
-from .gnn_modules import GATv2Conv
+from ..utils_nn import ChannelCombine
+
+from . import gnn_modules as gm
 
 
 class HetGraphLayer(nn.Module):
@@ -13,6 +14,9 @@ class HetGraphLayer(nn.Module):
         num_hiddens = config['num_hiddens']
         etypes = config['etypes']
         gnn_model = config['gnn_model']
+        num_heads = config['num_heads']
+        feat_drop = config['feat_drop']
+        attn_drop = config['attn_drop']
 
         if gnn_model == 'GCN':
             self.mods = nn.ModuleDict(
@@ -21,14 +25,27 @@ class HetGraphLayer(nn.Module):
             )
         elif gnn_model == 'GAT':
             self.mods = nn.ModuleDict(
-                {rel: dgl.nn.GATConv(num_hiddens, num_hiddens // config['num_heads'], config['num_heads'], feat_drop=config['feat_drop'], attn_drop=config['attn_drop'])
+                {rel: dgl.nn.GATConv(num_hiddens, num_hiddens // num_heads, num_heads, feat_drop=feat_drop, attn_drop=attn_drop)
                 for rel in etypes}
             )
         elif gnn_model == 'GATv2':
             self.mods = nn.ModuleDict(
-                {rel: GATv2Conv(num_hiddens, num_hiddens // config['num_heads'], config['num_heads'], feat_drop=config['feat_drop'], attn_drop=config['attn_drop'])
+                {rel: gm.GATv2Conv(num_hiddens, num_hiddens // num_heads, num_heads, feat_drop=feat_drop, attn_drop=attn_drop)
                 for rel in etypes}
             )
+        elif gnn_model == 'SelectGAT':
+            self.mods = nn.ModuleDict(
+                {rel: gm.SelectGATConv(num_hiddens, num_hiddens // num_heads, num_heads, feat_drop=feat_drop, attn_drop=attn_drop)
+                for rel in etypes}
+            )
+        elif gnn_model == 'Transformer':
+            self.mods = nn.ModuleDict(
+                {rel: gm.TransformerConv(num_hiddens, num_hiddens, num_heads, feat_drop=feat_drop, attn_drop=attn_drop)
+                for rel in etypes}
+            )
+
+
+            
         elif gnn_model == 'SAGE':
             self.mods = nn.ModuleDict(
                 {rel: dgl.nn.SAGEConv(num_hiddens, num_hiddens, aggregator_type='mean')
@@ -84,8 +101,6 @@ class HetGraphModel(nn.Module):
 
         num_feats = config['num_features']
         num_hiddens=config['num_hiddens']
-        num_classes = config['num_classes']
-
         self.feat_reduce = nn.Sequential(
             nn.Linear(num_feats, num_hiddens),
             nn.BatchNorm1d(num_hiddens),
@@ -98,13 +113,6 @@ class HetGraphModel(nn.Module):
                 self.layers.append(HetGraphLayer(config))
             self.skips.append(nn.Linear(num_hiddens, num_hiddens))
             self.norms.append(nn.BatchNorm1d(num_hiddens))
-        self.classification = nn.Sequential(
-            nn.Linear(num_hiddens, num_hiddens),
-            nn.BatchNorm1d(num_hiddens),
-            nn.ReLU(),
-            nn.Dropout(config['dropout']),
-            nn.Linear(num_hiddens, num_classes)
-        )
         self.layer_combine = ChannelCombine(num_hiddens, config['layer_combine'], config['num_layers'] + 1)
 
 
@@ -149,8 +157,6 @@ class HetGraphModel(nn.Module):
                 h_list.append(h)
             h = torch.stack(h_list, dim=0)
             h = self.layer_combine(h)
-
-        h = self.classification(h)
         return h
 
 

@@ -171,7 +171,7 @@ class SIGN(pl.LightningModule):
         torch.cuda.empty_cache()
         
     def configure_optimizers(self):
-        return get_optimizer(self.config, self.parameters())
+        return get_optimizer(self.config, self.parameters(), self.trainer.datamodule.train_dataloader())
     
     def configure_callbacks(self):
         model_checkpoint = pl.callbacks.ModelCheckpoint(monitor="val_acc", mode='max', save_top_k=1)

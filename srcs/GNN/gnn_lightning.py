@@ -1,5 +1,6 @@
 import os
 import pickle
+from torch.functional import split
 import tqdm
 import numpy as np
 import pandas as pd
@@ -12,31 +13,9 @@ import pytorch_lightning as pl
 from torchmetrics import Accuracy
 
 from .gnn_model import HetGraphModel
-from ..model_utils import get_optimizer
+from ..utils_nn import get_optimizer
 
 
-def load_model(ckpt_path):
-    ckpt = MaxpLightning.load_from_checkpoint(ckpt_path)
-    return ckpt
-
-
-@torch.no_grad()
-def graph_predict(model, datamodule, device):
-    loader = datamodule.predict_dataloader()
-    model = model.to(device)
-    model.eval()
-    nodes = []
-    preds = []
-    with tqdm.tqdm(loader) as tq:
-        for batch in tq:
-            _, output_nodes, _ = batch
-            batch_pred = model(batch)
-            nodes.append(output_nodes)
-            preds.append(batch_pred)
-        tq.set_description("Inference:")
-    nodes = torch.cat(nodes, dim=0).cpu()
-    preds = torch.cat(preds, dim=0).cpu()
-    return nodes, preds
 
 
 
@@ -46,16 +25,24 @@ class MaxpLightning(pl.LightningModule):
         self.config = config
         self.save_hyperparameters(config)
         self.steps_per_epoch = steps_per_epoch
-            
+        
+        num_hiddens = config['num_hiddens']
+        num_classes = config['num_classes']
         self.gnn = self.configure_gnn()
+        self.classification = nn.Sequential(
+            nn.Linear(num_hiddens, num_hiddens),
+            nn.BatchNorm1d(num_hiddens),
+            nn.ReLU(),
+            nn.Dropout(config['dropout']),
+            nn.Linear(num_hiddens, num_classes)
+        )
         self.train_acc = Accuracy()
         self.val_acc = Accuracy()
         
     def forward(self, batch):
         input_nodes, output_nodes, mfgs = batch
-        # batch_inputs = mfgs[0].srcdata['features']
-        # batch_labels = mfgs[-1].dstdata['labels']
-        batch_pred = self.gnn(mfgs)
+        batch_emb = self.gnn(mfgs)
+        batch_pred = self.classification(batch_emb)
         return batch_pred
     
     def training_step(self, batch, batch_idx):
@@ -92,10 +79,10 @@ class MaxpLightning(pl.LightningModule):
         torch.cuda.empty_cache()
         
     def configure_optimizers(self):
-        return get_optimizer(self.config, self.parameters(), self.trainer.datamodule.train_dataloader())
+        return get_optimizer(self.config, self.parameters(), self.steps_per_epoch)
     
     def configure_callbacks(self):
-        model_checkpoint = pl.callbacks.ModelCheckpoint(monitor="val_acc", mode='max', save_top_k=1)
+        model_checkpoint = pl.callbacks.ModelCheckpoint(monitor="val_loss", mode='min', save_top_k=1)
         return [model_checkpoint]
     
     def configure_gnn(self):
@@ -104,52 +91,57 @@ class MaxpLightning(pl.LightningModule):
 
 
 class MaxpDataModule(pl.LightningDataModule):
-    def __init__(self, config, device):
+    def __init__(self, config, graph_data, split_idx, device):
         super().__init__()
         self.config = config
         self.device = device
-        self.graph = self.load_graph(config['data_dir'], config['etypes']).to(device)
-        train_nid, val_nid, predict_nid = self.split_labels(self.config['data_dir'])
-        self.train_nid, self.val_nid, self.predict_nid = train_nid.to(device), val_nid.to(device), predict_nid.to(device)
-        self.configure_dataloader(config, self.graph, self.train_nid, self.val_nid, self.predict_nid)
+        graph, node_feat, labels = graph_data
+        graph.ndata['features'] = node_feat
+        graph.ndata['labels'] = labels
+        self.graph = graph.to(device)
+        train_nid, val_nid, predict_nid = split_idx
+        self.train_nid, self.val_nid, self.predict_nid = train_nid.to(self.device), val_nid.to(self.device), predict_nid.to(self.device)
 
+    def get_sample_loader(self, nid):
+        nid = nid.to(self.device)
+        loader = dgl.dataloading.NodeDataLoader(self.graph, nid, 
+                                                dgl.dataloading.MultiLayerNeighborSampler(self.config['fanouts']),
+                                                device=self.device,
+                                                batch_size=self.config['batch_size'],
+                                                shuffle=True,
+                                                drop_last=False,
+                                                num_workers=self.config['num_workers']
+                                                )
+        loader.set_epoch = None
+        return loader
 
-    def configure_dataloader(self, config, graph, train_nid, val_nid, predict_nid):
-        sampler = dgl.dataloading.MultiLayerNeighborSampler(config['fanouts'])
-        predict_sampler = dgl.dataloading.MultiLayerNeighborSampler([fo*10 for fo in config['fanouts']])
-        self.train_loader = dgl.dataloading.NodeDataLoader(graph, train_nid, sampler,
-                                                        device=self.device,
-                                                        batch_size=self.config['batch_size'],
-                                                        shuffle=True,
-                                                        drop_last=False,
-                                                        num_workers=self.config['num_workers']
-                                                        )
-        self.val_loader = dgl.dataloading.NodeDataLoader(graph, val_nid, sampler,
-                                                        device=self.device,
-                                                        batch_size=self.config['batch_size'],
-                                                        shuffle=True,
-                                                        drop_last=False,
-                                                        num_workers=self.config['num_workers']
-                                                        )
-        self.predict_loader = dgl.dataloading.NodeDataLoader(graph, predict_nid, predict_sampler,
-                                                            device=self.device,
-                                                            batch_size=self.config['batch_size'],
-                                                            shuffle=True,
-                                                            drop_last=False,
-                                                            num_workers=self.config['num_workers']
-                                                            )
-        self.train_loader.set_epoch = None
-        self.val_loader.set_epoch = None
-        self.predict_loader.set_epoch = None
+    def get_inference_loader(self, nid):
+        nid = nid.to(self.device)
+        if self.config['num_layers'] == 1:
+            fanouts = [50]
+        elif self.config['num_layers'] == 2:
+            fanouts = [30, 50]
+        elif self.config['num_layers'] == 3:
+            fanouts = [15, 30, 50]
+        loader = dgl.dataloading.NodeDataLoader(self.graph, nid, 
+                                                dgl.dataloading.MultiLayerNeighborSampler(fanouts),
+                                                device=self.device,
+                                                batch_size=self.config['batch_size'] // 4,
+                                                shuffle=True,
+                                                drop_last=False,
+                                                num_workers=self.config['num_workers']
+                                                )
+        loader.set_epoch = None
+        return loader
 
     def train_dataloader(self):
-        return self.train_loader
+        return self.get_sample_loader(self.train_nid)
     
     def val_dataloader(self):
-        return self.val_loader
+        return self.get_sample_loader(self.val_nid)
 
     def predict_dataloader(self):
-        return self.predict_loader
+        return self.get_full_loader(self.predict_nid)
     
     def describe(self):
         print('################ Graph info: ###############')
@@ -161,50 +153,4 @@ class MaxpDataModule(pl.LightningDataModule):
         print('                   Test label number: {}'.format(self.predict_nid.shape[0]))
         print('################ Feature info: ###############')
         print('Node\'s feature shape:{}'.format(self.graph.ndata['features'].shape))
-    
-    def load_graph(self, base_path, etypes=['cite', 'cited']):
-        data_dict = {}
-        df_path = os.path.join(base_path, 'edge_df.feather')
-        cite_df = pd.read_feather(df_path)
-        if 'cite' in etypes:
-            data_dict[('paper', 'cite', 'paper')] = (cite_df.src_nid.values, cite_df.dst_nid.values)
-        if 'cited' in etypes:
-            data_dict[('paper', 'cited', 'paper')] = (cite_df.dst_nid.values, cite_df.src_nid.values)
-        if 'bicited' in etypes:
-            srcs = np.concatenate((cite_df.src_nid.values, cite_df.dst_nid.values))
-            dsts = np.concatenate((cite_df.dst_nid.values, cite_df.src_nid.values))
-            data_dict[('paper', 'bicited', 'paper')] = (srcs, dsts)
-            # cited_df = cite_df.rename(columns={'src_nid': 'dst_nid', 'dst_nid': 'src_nid'})
-            # related_df = pd.concat([cite_df, cited_df], axis=0)
-            # data_dict[('paper', 'cited', 'paper')] = (related_df.dst_nid.values, related_df.src_nid.values)
-        graph = dgl.heterograph(data_dict)
 
-        with open(os.path.join(base_path, 'labels.pkl'), 'rb') as f:
-            label_data = pickle.load(f)
-        labels = torch.from_numpy(label_data['label']).long()
-        features = np.load(os.path.join(base_path, 'features.npy'))
-        node_feat = torch.from_numpy(features)
-
-        graph.ndata['features'] = node_feat
-        graph.ndata['labels'] = labels
-        # for et in etypes:
-        #     graph = dgl.add_self_loop(graph, etype=et)
-        graph.create_formats_()
-        return graph
-
-    def split_labels(self, base_path, splits='default'):
-        with open(os.path.join(base_path, 'labels.pkl'), 'rb') as f:
-            label_data = pickle.load(f)
-        labels = label_data['label']
-        tr_label_idx = label_data['tr_label_idx']
-        val_label_idx = label_data['val_label_idx']
-        test_label_idx = label_data['test_label_idx']
-        if splits == 'default':
-            tr_label_idx = torch.from_numpy(tr_label_idx).long()
-            val_label_idx = torch.from_numpy(val_label_idx).long()
-            test_label_idx = torch.from_numpy(test_label_idx).long()
-            pass
-        elif isinstance(splits, list) and len(splits) == 2:
-            all_label_idx = np.concatenate([tr_label_idx, val_label_idx])
-            pass
-        return tr_label_idx, val_label_idx, test_label_idx
