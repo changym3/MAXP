@@ -26,7 +26,7 @@ import dgl
 
 import pytorch_lightning as pl
 from srcs.GNN.gnn_lightning import MaxpLightning
-from srcs.utils import graph_predict_with_labels
+from srcs.utils.utils import graph_predict_with_labels
 
 
 

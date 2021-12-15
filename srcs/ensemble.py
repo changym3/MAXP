@@ -18,8 +18,8 @@ import pytorch_lightning as pl
 import torchmetrics as tm
 from torchmetrics import Accuracy
 
-from srcs.utils import load_default_split, load_graph, save_submission, get_parser
-from srcs.utils_train import ModelPredictor
+from srcs.utils.utils import load_default_split, load_graph, save_submission, get_parser
+from srcs.utils.training import ModelPredictor
 from srcs.GNN.gnn_lightning import MaxpDataModule, MaxpLightning
 
 

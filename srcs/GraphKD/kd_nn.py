@@ -23,10 +23,10 @@ import dgl
 import dgl.multiprocessing as mp
 import dgl.function as fn
 
-from srcs.SIGN.sign_nn import SIGNDataModule
+from srcs.SIGN.sign_model import SIGNDataModule
 from srcs.GNN.gnn_lightning import HetGraphModel
-from srcs.utils_nn import NodeFeatureDataset, get_optimizer
-from srcs.utils import load_graph, get_trainer
+from srcs.utils.nn import NodeFeatureDataset, get_optimizer
+from srcs.utils.utils import load_graph, get_trainer
 
 
 class ReconstructionModel(pl.LightningModule):

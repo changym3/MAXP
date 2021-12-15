@@ -1,13 +1,10 @@
-import argparse
-from easydict import EasyDict
-from pytorch_lightning import callbacks
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 
-import pytorch_lightning as pl
-from srcs.utils import graph_predict_with_labels
+from srcs.utils.data import Prediction
+
 
 
 def get_optimizer(config, parameters, steps_per_epoch):
@@ -106,3 +103,19 @@ class ChannelCombine(nn.Module):
         return h
 
 
+class KDModule:
+    def __init__(self, teacher_path, temperature, device) -> None:
+        self.teacher = Prediction.load_from_path(teacher_path)
+        self.teacher.to(device)
+        self.T = temperature
+        # self.alpha = alpha
+
+    def kd_loss(self, logits, y, nid):
+        student_log_prob = F.log_softmax(logits/self.T, dim=1)
+        # print(F.softmax(logits/self.T, dim=1)[:3])
+        teacher_log_prob = F.log_softmax(self.teacher.predictions[nid] / self.T, dim=1)
+        # print(F.softmax(self.teacher.predictions[nid] / self.T, dim=1)[:3])
+        # print('kl_div', F.kl_div(student_log_prob[:3], teacher_log_prob[:3], log_target=True) * (self.T * self.T))
+        kd_loss = F.kl_div(student_log_prob, teacher_log_prob, log_target=True) * (self.T * self.T)
+        # kd_loss = (1. - self.alpha) * ce_loss + self.alpha * kl_div
+        return kd_loss

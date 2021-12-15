@@ -27,11 +27,12 @@ def get_parser():
     parser.add_argument('--num_features', type=int, default=300)
     parser.add_argument('--num_classes', type=int, default=23)
     parser.add_argument('--etypes', nargs='+', type=str, default=['bicited'])
+    parser.add_argument('--use_degrees', nargs='+', type=int, default=[-1])
     # model_info
     parser.add_argument('--num_layers', type=int, default=3)
     parser.add_argument('--num_hiddens', type=int, default=256)
     parser.add_argument('--dropout', type=float, default=0.2)
-    parser.add_argument('--clipping_norm', type=float, default=0)
+    parser.add_argument('--clipping_norm', type=float, default=0.0)
     # optim-related
     parser.add_argument('--lr', type=float, default=0.001)
     parser.add_argument('--l2_norm', type=float, default=1e-4)
@@ -45,23 +46,31 @@ def get_parser():
     parser.add_argument('--name', type=str, default='default')
     parser.add_argument('--version', type=str, default=None)
     parser.add_argument('--training_mode', type=str, default='evaluate', choices=['evaluate', 'inference'])
+    parser.add_argument('--save_submission', action='store_true')
+
     parser.add_argument('--cv', type=int, default=5)
     parser.add_argument('--ensemble_type', type=str, default='avg', choices=['avg', 'linear_voting'])
     parser.add_argument('--random_state', type=int, default=42)
 
-    # pl trainer settigns
+    # pl trainer settings
     parser.add_argument('--patience', type=int, default=3)
     parser.add_argument('--accumulate_grad_batches', type=int, default=1)
 
     # graph specific params
     parser.add_argument('--fanouts', type=int, nargs='+', default=[10, 10, 10])
-    # parser.add_argument('--fanout', type=int, default=10)
     parser.add_argument('--gnn_model', type=str, default='Transformer')
     parser.add_argument('--het_combine', type=str, default='transform')
     parser.add_argument('--layer_combine', type=str, default='transform')
-    parser.add_argument('--num_heads', type=int, default=4)
+    parser.add_argument('--num_heads', type=int, default=2)
     parser.add_argument('--feat_drop', type=float, default=0.2)
     parser.add_argument('--attn_drop', type=float, default=0.2)
+
+    # debug settings
+    parser.add_argument('--dev', action='store_true')
+    parser.add_argument('--fast_dev_run', type=int, default=10)
+    parser.add_argument('--overfit_batches', type=int, default=10)
+    parser.add_argument('--track_grad_norm', type=int, default=-1)
+
     return parser
 
 
@@ -73,18 +82,29 @@ def get_trainer(config):
     return trainer
 
 def get_trainer_args(config):
-    tr_args = EasyDict()
+    tr_args = {}
     logger = pl.loggers.TensorBoardLogger(
         save_dir='./logs/', name=config.name, version=config.version,
         default_hp_metric=False,
     )
     tr_args['callbacks'] = [
         pl.callbacks.LearningRateMonitor(logging_interval='step'),
+        # pl.callbacks.DeviceStatsMonitor(),
         # pl.callbacks.StochasticWeightAveraging(annealing_epochs=3)
         # pl.callbacks.EarlyStopping(monitor="val_loss", mode="max", patience=config.patience)
     ]
-    # tr_args['accumulate_grad_batches'] = config.accumulate_grad_batches
     # tr_args['gradient_clip_val'] = config.clipping_norm
+    # tr_args['track_grad_norm'] = config.track_grad_norm
+
+    # tr_args['accumulate_grad_batches'] = {2: 2,
+    # 5:4
+    # }
+    # config.accumulate_grad_batches
+
+    if config.dev:
+        tr_args['fast_dev_run'] = config.fast_dev_run
+        # tr_args['overfit_batches'] = config.overfit_batches
+
     tr_args['log_every_n_steps'] = 1
     tr_args['logger'] = logger
     tr_args['gpus'] = [config.gpu_id]
@@ -100,41 +120,7 @@ def load_model(ModelClass, model_dir):
     return model
 
 
-def load_graph(base_path, etypes):
-    data_dict = {}
-    df_path = os.path.join(base_path, 'edge_df.feather')
-    cite_df = pd.read_feather(df_path)
-    if 'cite' in etypes:
-        data_dict[('paper', 'cite', 'paper')] = (cite_df.src_nid.values, cite_df.dst_nid.values)
-    if 'cited' in etypes:
-        data_dict[('paper', 'cited', 'paper')] = (cite_df.dst_nid.values, cite_df.src_nid.values)
-    if 'bicited' in etypes:
-        srcs = np.concatenate((cite_df.src_nid.values, cite_df.dst_nid.values))
-        dsts = np.concatenate((cite_df.dst_nid.values, cite_df.src_nid.values))
-        data_dict[('paper', 'bicited', 'paper')] = (srcs, dsts)
-    graph = dgl.heterograph(data_dict)
 
-    with open(os.path.join(base_path, 'labels.pkl'), 'rb') as f:
-        label_data = pickle.load(f)
-    labels = torch.from_numpy(label_data['label']).long()
-    features = np.load(os.path.join(base_path, 'features.npy'))
-    node_feat = torch.from_numpy(features)
-    # for et in etypes:
-    #     graph = dgl.add_self_loop(graph, etype=et)
-    graph.create_formats_()
-    return graph, node_feat, labels
-
-
-def load_default_split(base_path):
-    with open(os.path.join(base_path, 'labels.pkl'), 'rb') as f:
-        label_data = pickle.load(f)
-    tr_label_idx = label_data['tr_label_idx']
-    val_label_idx = label_data['val_label_idx']
-    test_label_idx = label_data['test_label_idx']
-    tr_label_idx = torch.from_numpy(tr_label_idx).long()
-    val_label_idx = torch.from_numpy(val_label_idx).long()
-    test_label_idx = torch.from_numpy(test_label_idx).long()
-    return tr_label_idx, val_label_idx, test_label_idx
 
 
 @torch.no_grad()
